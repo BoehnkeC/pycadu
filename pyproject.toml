@@ -1,21 +1,25 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [project]
 name = "pycadu"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Satellite-agnostic CCSDS/CADU/VCDU frame handling"
 readme = "README.rst"
 requires-python = ">=3.14"
-license = "GPL-3.0-or-later"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+
 authors = [
   { name = "Martin Raspaud", email = "martin.raspaud@smhi.se" },
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
   "Operating System :: OS Independent",
   "Programming Language :: Python",
   "Topic :: Scientific/Engineering",
@@ -42,7 +46,7 @@ dev = [
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "RUF"]
