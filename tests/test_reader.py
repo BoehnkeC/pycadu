@@ -21,9 +21,7 @@ def _wrap_frames_in_cadu_blocks(frame_data: bytes, vcid: int = 3) -> bytes:
     for i in range(n_blocks):
         payload = frame_data[i * VCDU_PAYLOAD_LENGTH : (i + 1) * VCDU_PAYLOAD_LENGTH]
         payload = payload.ljust(VCDU_PAYLOAD_LENGTH, b"\x00")
-        header = (
-            CCSDS_SYNC_MARKER + bytes([0x4D, vcid & 0x3F]) + b"\x00" * (CCSDS_HEADER_LENGTH - 6)
-        )
+        header = CCSDS_SYNC_MARKER + bytes([0x4D, vcid & 0x3F]) + b"\x00" * (CCSDS_HEADER_LENGTH - 6)
         out += header + payload + b"\x00" * RS_PARITY_LENGTH
     return bytes(out)
 
@@ -88,9 +86,7 @@ def test_vcdu_frames_handles_bit_shifted_payload_stream():
         right_shifted[i] = ((arr[i - 1] << 6) | (arr[i] >> 2)) & 0xFF
     payload = bytes(right_shifted[:-1])
 
-    payloads = (
-        payload[i : i + VCDU_PAYLOAD_LENGTH] for i in range(0, len(payload), VCDU_PAYLOAD_LENGTH)
-    )
+    payloads = (payload[i : i + VCDU_PAYLOAD_LENGTH] for i in range(0, len(payload), VCDU_PAYLOAD_LENGTH))
     result = list(vcdu_frames(payloads, PATTERN, FRAME_SIZE))
     assert len(result) == 1
     assert result[0][: len(PATTERN)] == PATTERN
@@ -110,4 +106,90 @@ def test_read_frames_batch_matches_streaming():
         )
         expected = list(stream)
         actual = read_frames_batch(dat, CADU_STRIDE_1024, 3, PATTERN, FRAME_SIZE)
-    assert actual == expected
+    assert actual.frames == expected
+    assert actual.bit_shift == 0
+
+
+def test_read_frames_batch_drops_frame_at_naive_chunk_boundary():
+    """Without carrying state, the frame straddling a chunk split is lost."""
+    from pycadu.reader import read_frames_batch
+
+    file_data = _wrap_frames_in_cadu_blocks(_two_frames(), vcid=3)
+    stride = CADU_STRIDE_1024
+    split = (len(file_data) // stride // 2) * stride
+
+    with tempfile.TemporaryDirectory() as tmp:
+        whole = Path(tmp) / "whole.dat"
+        whole.write_bytes(file_data)
+        expected = read_frames_batch(whole, stride, 3, PATTERN, FRAME_SIZE).frames
+
+        chunk_a = Path(tmp) / "a.dat"
+        chunk_b = Path(tmp) / "b.dat"
+        chunk_a.write_bytes(file_data[:split])
+        chunk_b.write_bytes(file_data[split:])
+        naive_a = read_frames_batch(chunk_a, stride, 3, PATTERN, FRAME_SIZE)
+        naive_b = read_frames_batch(chunk_b, stride, 3, PATTERN, FRAME_SIZE)
+
+    assert naive_a.frames + naive_b.frames != expected
+
+
+def test_read_frames_batch_carries_state_across_chunk_boundary():
+    """Feeding chunk A's leftover state into chunk B reconstructs the same
+    frames as processing the whole file in one call."""
+    from pycadu.reader import read_frames_batch
+
+    file_data = _wrap_frames_in_cadu_blocks(_two_frames(), vcid=3)
+    stride = CADU_STRIDE_1024
+    split = (len(file_data) // stride // 2) * stride
+
+    with tempfile.TemporaryDirectory() as tmp:
+        whole = Path(tmp) / "whole.dat"
+        whole.write_bytes(file_data)
+        expected = read_frames_batch(whole, stride, 3, PATTERN, FRAME_SIZE).frames
+
+        chunk_a = Path(tmp) / "a.dat"
+        chunk_b = Path(tmp) / "b.dat"
+        chunk_a.write_bytes(file_data[:split])
+        chunk_b.write_bytes(file_data[split:])
+
+        result_a = read_frames_batch(chunk_a, stride, 3, PATTERN, FRAME_SIZE)
+        result_b = read_frames_batch(
+            chunk_b,
+            stride,
+            3,
+            PATTERN,
+            FRAME_SIZE,
+            initial_buf=result_a.tail_buf,
+            initial_bit_shift=result_a.bit_shift,
+            initial_raw_carry=result_a.raw_carry,
+            initial_sync_acc=result_a.sync_acc,
+        )
+
+    assert result_a.frames + result_b.frames == expected
+    assert not result_b.desynced
+
+
+def test_read_frames_batch_flags_desync_when_carried_sync_never_found():
+    from pycadu.reader import read_frames_batch
+
+    # A block whose payload never contains PATTERN at any bit shift (all-0xFF
+    # can't line up with the alternating 0xAA/0x55 pattern), so sync search
+    # fails even with carried-over unsynced state from a (simulated) previous
+    # chunk.
+    garbage_block = _wrap_frames_in_cadu_blocks(b"\xff" * VCDU_PAYLOAD_LENGTH, vcid=3)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dat = Path(tmp) / "garbage.dat"
+        dat.write_bytes(garbage_block)
+        result = read_frames_batch(
+            dat,
+            CADU_STRIDE_1024,
+            3,
+            PATTERN,
+            FRAME_SIZE,
+            initial_sync_acc=b"\xff" * 64,
+        )
+
+    assert result.frames == []
+    assert result.bit_shift is None
+    assert result.desynced
