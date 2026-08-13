@@ -74,3 +74,16 @@ API
 ``CCSDS_SYNC_MARKER``, ``CADU_STRIDE_896``, ``CADU_STRIDE_1024``,
 ``RS_PARITY_LENGTH``, ``CADU_DATA_LENGTH``, ``CCSDS_HEADER_LENGTH``,
 ``VCDU_PAYLOAD_LENGTH``.
+
+Testing
+-------
+
+``tests/assets/make_test_chunks.sh`` builds the small, real-satellite-data
+fixtures used by the chunk-boundary tests in ``tests/test_reader.py``. Given
+a real ``.tm`` telemetry file, it keeps two genuine sync-anchored byte runs
+(the start of one real VCDU frame, and the start of the next) and drops the
+megabytes of real content around and between them, producing a small
+``<name>.tm`` reference file plus the ``<name>_1.tm`` / ``<name>_2.tm``
+chunks it splits into (``<name>_1.tm`` + ``<name>_2.tm`` is byte-for-byte
+``<name>.tm``) — a real frame split, at a size small enough to commit. See
+``make_test_chunks.sh --help`` for usage.
